@@ -1,0 +1,10 @@
+LICENSE
+README.md
+pyproject.toml
+icartt_read_and_merge/__init__.py
+icartt_read_and_merge/icartt_read_and_merge.py
+icartt_read_and_merge.egg-info/PKG-INFO
+icartt_read_and_merge.egg-info/SOURCES.txt
+icartt_read_and_merge.egg-info/dependency_links.txt
+icartt_read_and_merge.egg-info/requires.txt
+icartt_read_and_merge.egg-info/top_level.txt
