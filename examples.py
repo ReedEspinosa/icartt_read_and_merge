@@ -1,7 +1,7 @@
 """A script showing off some of the functionality of icartt_rea_and_merge."""
 
 import icartt_read_and_merge as ict
-
+"""
 # =============================================================================
 #                             EXAMPLE #1
 # =============================================================================
@@ -22,21 +22,23 @@ tm_step = 5 * 60  # Do a 5 minute average (tm_stepmust be in seconds)
 # Re-sample and get a 5 minute average of the data.
 df_5min = ict.align2master_timeline(df_fancy, startdate, enddate, tm_step,
                                     quiet=False)
+"""
 
 # =============================================================================
 #                          "MERGE_BESIDE" example;
 # ============================================================================
-data_directory = "C:\\Users\\myusername\\Data\\icartts\\"
-output_directory = "C:\\Users\\myusername\\Data\\outputs\\"
-output_filename = 'special_name_outfile'
+data_directory = "/Users/wrespino/Downloads/ACTIVATE_TEST"
+output_directory = "/Users/wrespino/Downloads/ACTIVATE_TEST"
+output_filename = 'merged_LAS-SMPS-Optical_outfile'
 prefix_instr_name = True
 mode_input = 'Merge_Beside'
-master_timeline = ['2013-06-01 00:00:00', '2013-07-15 00:00:00', 1800]
+master_timeline = ['2020-02-14 00:00:00', '2020-02-16 00:00:00', 5]
 
 df, meta = ict.icartt_merger(data_directory, mode_input, master_timeline,
                              output_directory, output_filename,
                              prefix_instr_name)
 
+"""
 # =============================================================================
 #                          "STACK_ON_TOP" example;
 # =============================================================================
@@ -49,3 +51,4 @@ df, meta = ict.icartt_merger(data_directory, mode_input,
                              output_directory=output_directory,
                              output_filename=output_filename,
                              prefix_instr_name=False)
+"""
