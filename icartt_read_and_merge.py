@@ -139,7 +139,7 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
 
         if not lim:
             lim = np.round(4350 / min_sep)  # don't fill if collect>than 1H out
-        dfn = df.reindex(dts, method='nearest', fill_value=np.NaN,
+        dfn = df.reindex(dts, method='nearest', fill_value=np.nan,
                          limit=int(lim))
 
         # Take a centered boxcar average around the X s avg.
@@ -159,7 +159,7 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
             if lim <= 0:
                 lim = 1  # If lim not set and too small, just use 1 point.
             
-            df_new = df.reindex(dts, method='nearest', fill_value=np.NaN,
+            df_new = df.reindex(dts, method='nearest', fill_value=np.nan,
                                 limit=int(lim))
 
     # Plot the Original Data & the Re- Mapped stuff so you can see if its good:
@@ -187,7 +187,7 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
     # denotations. Setting quiet to False will print your col names and
     # what it is finding so you can decide what to add to this list.
     tm_names = ['utc', 'cst', 'cdt', 'local', 'lst', 'est', 'pst',
-                'gmt'', lt', 'time_mid', 'central_standard',
+                'gmt', 'lt', 'time', 'time_mid', 'central_standard',
                 'eastern_standard', 'pacific_standard']
 
     print('All Column Names:', df.columns) if quiet is False else None
@@ -201,8 +201,7 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
             df.rename(columns={col: col.lower()}, inplace=True)
 
     # Make sure you haven't grabbed a day column for time by accident. Drop it.
-    for h in range(0, len(times)):
-        times.remove(times[h]) if 'day' in times[h] else None
+    times = [t for t in times if 'day' not in t]
 
     print('Original Time Columns Found:', times) if quiet is False else None
     # Return the dataframe with lowercase time names, a list of the time
@@ -279,14 +278,16 @@ def _pick_a_single_time_col(times: list, nn_times: dict, quiet: bool = True):
                  'time_local': 11, 'local_mid': 12,
                  'time_lt': 13, 'lt_mid': 14,
                  'time_lst': 15, 'lst_mid': 16,
-                 'time_time_mid': 17, 'time_mid_mid': 18}
+                 'time_time_mid': 17, 'time_mid_mid': 18,
+                 'time_mid': 19, 'time_start': 20, 'time_stop': 21, 'time_end': 21}
 
     # Create dictionary to associate a "time" column name with its timezone.
     tz_info = {'time_utc': 'UTC', 'utc_mid': 'UTC',
                'time_est': 'EST5EDT', 'est_mid': 'EST5EDT',
                'time_cst': 'US/Central', 'cst_mid': 'US/Central',
                'time_cdt': 'CST6CDT', 'cdt_mid': 'CST6CDT',
-               'time_pst': 'PST8PDT', 'pst_mid': 'PST8PDT'}
+               'time_pst': 'PST8PDT', 'pst_mid': 'PST8PDT',
+               'time_mid': 'UTC', 'time_start': 'UTC', 'time_stop': 'UTC', 'time_end': 'UTC'}
 
     pref_arr = list()  # empty list to contain pref rank of "time cols"
     tz_arr = list()  # Empty list to contain the timezone of the "time cols"
@@ -294,27 +295,54 @@ def _pick_a_single_time_col(times: list, nn_times: dict, quiet: bool = True):
     for n in range(0, len(times)):  # Get an array of # preferences for "times"
         # Get the nickname of the time col if its not a mid point.
         check_if_NOT_mid = nn_times.get(times[n], None)
-        if check_if_NOT_mid is None:  # has no nickname,it is a midpoint.
-            pref_arr.append(pref_time.get(times[n], 100))
-            tz_arr.append(tz_info.get(times[n], 100))
+        
+        # Extract the time pattern from the column name (handle prefixed columns)
+        time_pattern = None
+        patterns_to_check = ['time_mid', 'utc_mid', 'est_mid', 'cst_mid', 'cdt_mid', 'pst_mid', 
+                            'local_mid', 'lt_mid', 'lst_mid', 'time_utc', 'time_est', 'time_cst',
+                            'time_cdt', 'time_pst', 'time_local', 'time_lt', 'time_lst',
+                            'time_start', 'time_stop', 'time_end']
+        for pattern in patterns_to_check:
+            if pattern in times[n]:
+                time_pattern = pattern
+                break
+        
+        if check_if_NOT_mid is None:  # has no nickname, it is a midpoint or standalone time col
+            # Try to match the full name first, then try extracted pattern
+            pref_val = pref_time.get(times[n], pref_time.get(time_pattern, 100) if time_pattern else 100)
+            tz_val = tz_info.get(times[n], tz_info.get(time_pattern, 100) if time_pattern else 100)
+            pref_arr.append(pref_val)
+            tz_arr.append(tz_val)
         else:  # has a nickname, pass that to get preference.
-            pref_arr.append(pref_time.get(check_if_NOT_mid, 100))
-            tz_arr.append(tz_info.get(check_if_NOT_mid, 100))
+            # Try nickname first, then fall back to pattern matching if nickname doesn't match
+            pref_val = pref_time.get(check_if_NOT_mid, pref_time.get(time_pattern, 100) if time_pattern else 100)
+            tz_val = tz_info.get(check_if_NOT_mid, tz_info.get(time_pattern, 100) if time_pattern else 100)
+            pref_arr.append(pref_val)
+            tz_arr.append(tz_val)
 
+    # Check if no time columns were found
+    if len(pref_arr) == 0:
+        _exit_with_error(('No time columns were found in the ICARTT file. '
+                         'Try running the call to function with quiet=False '
+                         'to see debug output.'))
+    
     if min(pref_arr) == 100:
-        _exit_with_error(('Time columnName in the "pick_a_single_time_col()"'),
-                         ('function could not be properly identified. Try'),
-                         ('running the call to function with quiet=False'),
-                         ('to see debug output.'))
+        _exit_with_error(('Time columnName in the "pick_a_single_time_col()" '
+                         'function could not be properly identified. Try '
+                         'running the call to function with quiet=False '
+                         'to see debug output.'))
 
     # Pick one of the time columns based on your ranked preferences.
-    time_pref = times[(pref_arr == min(pref_arr))]  # Name of the pref time col
-    tz_pref = tz_arr[(pref_arr == min(pref_arr))]  # Timeezone of pre time col
+    min_pref = min(pref_arr)
+    min_idx = pref_arr.index(min_pref)  # Find index of minimum preference
+    time_pref = times[min_idx]  # Name of the pref time col
+    tz_pref = tz_arr[min_idx]  # Timeezone of pre time col
 
     if tz_pref == 100:
-        _exit_with_error([('Unable to ID timezone in pick_a_single_time_col()'),
-                         ('function.Try running the call to function with'),
-                         ('quiet=False to see debug output.')])
+        # Default to UTC if timezone can't be identified (common for generic "time" columns)
+        tz_pref = 'UTC'
+        if quiet is False:
+            print(f'WARNING: Could not identify timezone for time column "{time_pref}", defaulting to UTC')
 
     print('Pref time col:', time_pref, ' in', tz_pref,
           'Timezone') if quiet is False else None
@@ -490,17 +518,37 @@ def read_icartt(icartt_file: str, flt_num: int = None, meta: dict = {},
     """Parse a single ICARTT file to a pandas dataframe."""
     # Get the header row number from the ICARTT.
     with open(icartt_file, "r") as f:
-        header_row = int(f.readlines()[0].split(",")[0]) - 1
+        first_line = f.readlines()[0]
+        header_row_num = int(first_line.split(",")[0]) - 1
+    
+    # Check if the header row is a separator row (all asterisks), if so use next row
+    with open(icartt_file, "r") as f:
+        lines = f.readlines()
+        if header_row_num < len(lines):
+            header_line = lines[header_row_num].strip()
+            # If it's a separator row (all asterisks or similar), use the next row
+            if header_line:
+                # Check if it's mostly separator characters (asterisks, dashes, equals)
+                cleaned_line = header_line.replace(' ', '').replace('\t', '')
+                # More lenient check: if line is mostly separators, skip it
+                if cleaned_line:
+                    separator_count = sum(1 for c in cleaned_line if c in ['*', '-', '=', '_'])
+                    if separator_count > len(cleaned_line) * 0.9 and len(cleaned_line) > 10:
+                        header_row_num += 1
 
     # Parse the table starting where data begins (e.g. after the header).
-    df = pd.read_csv(icartt_file, header=header_row, delimiter=",")
+    # Use skiprows to skip up to the header, then use header=0 to read column names from first row
+    df = pd.read_csv(icartt_file, skiprows=header_row_num, nrows=0, delimiter=",", skipinitialspace=True)
+    column_names = list(df.columns)
+    # Now read the actual data starting from the row after the header
+    df = pd.read_csv(icartt_file, skiprows=header_row_num + 1, names=column_names, delimiter=",", skipinitialspace=True)
     
     # Set possible error values to NaNs.
-    df.replace(-9, np.NaN, inplace=True)
-    df.replace(-99, np.NaN, inplace=True)
-    df.replace(-999, np.NaN, inplace=True)
-    df.replace(-9999, np.NaN, inplace=True)
-    df.replace(-99999, np.NaN, inplace=True)
+    df.replace(-9, np.nan, inplace=True)
+    df.replace(-99, np.nan, inplace=True)
+    df.replace(-999, np.nan, inplace=True)
+    df.replace(-9999, np.nan, inplace=True)
+    df.replace(-99999, np.nan, inplace=True)
     
     # Strip leading/tailing white space around variable names
     df.columns = [c.strip() for c in list(df.columns)]
@@ -743,11 +791,11 @@ def icartt_merger(data_directory: str,
     df, meta = _main_loop_parse_flights(DATA)
     
     # Save the Output.
-    filename = DATA['DIR_OUTPUT'] + DATA['O_FILENAME'] + '.pkl'
+    filename = os.path.join(DATA['DIR_OUTPUT'], DATA['O_FILENAME'] + '.pkl')
     df.to_pickle(filename)
     
     # Save the metadata to a picke as well.
-    filename_meta = DATA['DIR_OUTPUT'] + DATA['O_FILENAME'] + '_meta.pickle'
+    filename_meta = os.path.join(DATA['DIR_OUTPUT'], DATA['O_FILENAME'] + '_meta.pickle')
     mpu.io.write(filename_meta, meta)
     
     # Tell the people where you saved it.
