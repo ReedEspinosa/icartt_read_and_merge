@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.7"
 license = {text = "MIT"}
 authors = [
-    {name = "Jessica D. Haskins", email = "jhaskins@alum.mit.edu"}
+    {name = "Jessica D. Haskins", email = "jhaskins@alum.mit.edu"},
+    {name = "Reed Espinosa", email = "reed.espinosa@nasa.gov"}
 ]
 keywords = ["icartt", "data", "pandas", "atmospheric", "science"]
 classifiers = [
@@ -42,9 +43,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jdhaskins/icartt_read_and_merge"
-Repository = "https://github.com/jdhaskins/icartt_read_and_merge"
-Issues = "https://github.com/jdhaskins/icartt_read_and_merge/issues"
+Homepage = "https://github.com/ReedEspinosa/icartt_read_and_merge"
+Repository = "https://github.com/ReedEspinosa/icartt_read_and_merge"
+Issues = "https://github.com/ReedEspinosa/icartt_read_and_merge/issues"
 
 [tool.setuptools]
 packages = ["icartt_read_and_merge"]

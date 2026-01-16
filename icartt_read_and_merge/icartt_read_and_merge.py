@@ -53,14 +53,24 @@ def _crawl_directory(path: str, extension: str = None):
         ext (str): An optional extension to limit search.\
     Returns:  A list of paths to data files (strings)."""
     selected_files = []  # Create an empty list
+    
+    # Default to .ict extension for ICARTT files if no extension specified
+    if extension is None:
+        extension = '.ict'
+    
+    # Files to exclude (system files, etc.)
+    excluded_files = {'.DS_Store', 'Thumbs.db', '.pkl', '.pickle'}
 
     for root, dirs, files in os.walk(path):  # Walk directory.
         for f in files:  # Loop over files,
-            fext = os.path.splitext(f)[1]  # Get the extension.
+            fext = os.path.splitext(f)[1].lower()  # Get the extension (lowercase).
+            
+            # Skip excluded files
+            if f in excluded_files or fext in excluded_files:
+                continue
 
-            # If file matches input extension or if no extension given,
-            if extension is None or extension == fext:
-
+            # If file matches input extension
+            if extension.lower() == fext:
                 # Join to root for the full path.
                 fpath = os.path.join(root, f)
                 # Add to list.
