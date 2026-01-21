@@ -206,12 +206,17 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
     times = list()  # Empty list to contain columns with time-like names.
     for col in df.columns:
         if any(nm in col.lower() for nm in tm_names):
-            times.append(col.lower())  # fill the list with those names.
+            col_lower = col.lower()
+            times.append(col_lower)  # fill the list with those names.
             # Rename all time cols in lowercase to make string matches easier
-            df.rename(columns={col: col.lower()}, inplace=True)
+            if col != col_lower:  # Only rename if different
+                df.rename(columns={col: col_lower}, inplace=True)
 
     # Make sure you haven't grabbed a day column for time by accident. Drop it.
     times = [t for t in times if 'day' not in t]
+    
+    # Ensure all times in the list actually exist in the dataframe
+    times = [t for t in times if t in df.columns]
 
     print('Original Time Columns Found:', times) if quiet is False else None
     # Return the dataframe with lowercase time names, a list of the time
@@ -246,16 +251,30 @@ def _make_time_midpoint_cols(df: pd.DataFrame, tm_names: list, times: list,
 
         # You found a start/stop pair for this time name.
         if (start_j is not None) and (stop_j is not None):
+            # Ensure both start and stop columns exist in dataframe
+            if start_j not in df.columns or stop_j not in df.columns:
+                if quiet is False:
+                    print(f"Warning: Start/stop pair ({start_j}, {stop_j}) not found in dataframe. Skipping midpoint creation.")
+                continue
+            
             # Make a new column in the data frame that is the midpoint.
-            df[tm_names[j] + '_mid'] = (df[start_j] + df[stop_j]) / 2
+            midpoint_name = tm_names[j] + '_mid'
+            df[midpoint_name] = (df[start_j] + df[stop_j]) / 2
 
             # Remove the start & stop pair of time from the larger df
             df = df.drop(columns=[start_j, stop_j])
 
             # Update list of column names with times to reflect above.
-            times.append(tm_names[j] + '_mid')  # add midpoint name
-            times.remove(start_j)  # remove oldies
-            times.remove(stop_j)
+            # Only add to times if the column was successfully created
+            if midpoint_name in df.columns:
+                # Remove old start/stop columns from times list first
+                if start_j in times:
+                    times.remove(start_j)
+                if stop_j in times:
+                    times.remove(stop_j)
+                # Only add midpoint if it's not already in the list (avoid duplicates)
+                if midpoint_name not in times:
+                    times.append(midpoint_name)  # add midpoint name
 
         elif has_tm is not None:
             # Populate dict associating its actual timename and its "type" so
@@ -270,6 +289,9 @@ def _make_time_midpoint_cols(df: pd.DataFrame, tm_names: list, times: list,
             # times.append('time_' + tm_names[j])  # add new name
             # times.remove(has_tm)  # remove old name
 
+    # Filter times list to only include columns that actually exist in dataframe
+    times = [t for t in times if t in df.columns]
+    
     print('Time cols After Mid_Point Assign:',
           times) if quiet is False else None
 
@@ -278,6 +300,11 @@ def _make_time_midpoint_cols(df: pd.DataFrame, tm_names: list, times: list,
 
 def _pick_a_single_time_col(times: list, nn_times: dict, quiet: bool = True):
     """Decide which time column you prefer to use a indx if you got lots."""
+    # Validate input
+    if not times or len(times) == 0:
+        _exit_with_error('_pick_a_single_time_col called with empty times list. '
+                        'This should not happen - time columns should be validated before calling this function.')
+    
     # Create dictionary for "picking" which time variable we prefer to use.
     # Change the rank for preferences here. Lower = more desirable.
     pref_time = {'time_utc': 1, 'utc_mid': 2,
@@ -373,6 +400,15 @@ def icartt_time_to_datetime(df: pd.DataFrame, yr, mon, day, time_col: str,
     mon = int(mon) if type(mon) == str else mon
     day = int(day) if type(day) == str else day
 
+    # Check if the time column exists in the dataframe
+    if time_col not in df.columns:
+        # Try to find a matching column (case-insensitive or with prefix)
+        matching_cols = [col for col in df.columns if time_col.lower() in col.lower() or col.lower() in time_col.lower()]
+        if matching_cols:
+            time_col = matching_cols[0]
+        else:
+            _exit_with_error(f"Time column '{time_col}' not found in dataframe. Available columns: {list(df.columns)}")
+
     # Add "timedelta" of seconds since midnight to the date the icarrt
     # file started on (typically in the file name).
     datetime_col_i = datetime.datetime(yr, mon, day) + \
@@ -403,11 +439,54 @@ def master_icartt_time_parser(df: pd.DataFrame, icartt_file: str,
     df, times, tm_names, nn_times = _make_time_midpoint_cols(df, tm_names,
                                                              times, quiet)
 
+    # Filter times list to only include columns that actually exist in dataframe
+    times_before_filter = times.copy()
+    times = [t for t in times if t in df.columns]
+    
+    # Debug: if filtering removed items, that's a problem
+    if len(times_before_filter) > len(times):
+        removed = [t for t in times_before_filter if t not in times]
+        if not quiet:
+            print(f"Warning: Removed {len(removed)} time column names that don't exist in dataframe: {removed}")
+    
+    # Check if we have any time columns at all
+    if len(times) == 0:
+        available_cols_str = ', '.join([f"'{c}'" for c in list(df.columns)[:30]])
+        if len(df.columns) > 30:
+            available_cols_str += f", ... (and {len(df.columns) - 30} more)"
+        _exit_with_error(f"No time columns found in dataframe after filtering. "
+                        f"Original times list: {times_before_filter}. "
+                        f"Available columns: [{available_cols_str}]")
+    
     # Pick which time var to use and which time zone its in.
     time_pref, tz_pref, bad_times = _pick_a_single_time_col(times,
                                                             nn_times, quiet)
+    
+    # CRITICAL: Ensure the selected time column actually exists in the dataframe
+    # This is a final safety check before we try to use the column
+    if time_pref not in df.columns:
+        # Try to find a matching column (case-insensitive match)
+        matching_cols = [col for col in df.columns if time_pref.lower() == col.lower()]
+        if matching_cols:
+            time_pref = matching_cols[0]
+        else:
+            # Try partial match (in case of prefixing issues)
+            matching_cols = [col for col in df.columns if time_pref.lower() in col.lower() or col.lower().endswith('_' + time_pref.lower())]
+            if matching_cols:
+                time_pref = matching_cols[0]
+            else:
+                # Final check - if still not found, provide detailed error
+                available_cols_str = ', '.join([f"'{c}'" for c in df.columns[:20]])  # Show first 20 columns
+                if len(df.columns) > 20:
+                    available_cols_str += f", ... (and {len(df.columns) - 20} more)"
+                _exit_with_error(f"Selected time column '{time_pref}' not found in dataframe. "
+                                f"Times list contained: {times}. "
+                                f"Available columns: [{available_cols_str}]")
+    
     if remove_old_time is True:  # Remove the non-preferred times
-        df = df.drop(columns=bad_times)
+        # Only drop columns that actually exist
+        bad_times_existing = [col for col in bad_times if col in df.columns]
+        df = df.drop(columns=bad_times_existing)
         # you've dropped all other names from the df.
         times = list([time_pref])
     else:
@@ -420,6 +499,15 @@ def master_icartt_time_parser(df: pd.DataFrame, icartt_file: str,
     mm = date_full[4:6]
     dd = date_full[6:8]
 
+    # Final validation: ensure time_pref exists in dataframe before proceeding
+    if time_pref not in df.columns:
+        available_cols_str = ', '.join([f"'{c}'" for c in list(df.columns)[:20]])
+        if len(df.columns) > 20:
+            available_cols_str += f", ... (and {len(df.columns) - 20} more)"
+        _exit_with_error(f"Cannot proceed: Selected time column '{time_pref}' does not exist in dataframe. "
+                        f"Times list was: {times}. "
+                        f"Available columns: [{available_cols_str}]")
+    
     # Tell the people which variable was chosen as "datetime".
     print('The time variable chosen to be converted to "datetime" is:',
           time_pref)
@@ -674,7 +762,28 @@ def _main_loop_parse_flights(DATA: dict):
             else:
                 # For all subsequent loops append new columns to existing df
                 # along the same index.
-                df_all = pd.concat([df_all, df_data], axis=1)
+                # Handle duplicate column names when prefix_instr_name=False
+                if not DATA['PREFIX_OPT']:
+                    # Check for duplicate column names before merging
+                    overlapping_cols = set(df_all.columns) & set(df_data.columns)
+                    non_overlapping_cols = set(df_data.columns) - overlapping_cols
+                    
+                    if overlapping_cols:
+                        # For overlapping columns, combine them by filling NaN values
+                        # Since files represent different time windows, data shouldn't overlap
+                        for col in overlapping_cols:
+                            # Fill NaN values in df_all[col] with values from df_data[col]
+                            # Use combine_first to merge, prioritizing df_all but filling with df_data
+                            df_all[col] = df_all[col].combine_first(df_data[col])
+                        
+                        # Add non-overlapping columns normally
+                        if non_overlapping_cols:
+                            df_all = pd.concat([df_all, df_data[list(non_overlapping_cols)]], axis=1)
+                    else:
+                        # No overlapping columns, merge normally
+                        df_all = pd.concat([df_all, df_data], axis=1)
+                else:
+                    df_all = pd.concat([df_all, df_data], axis=1)
 
         ct += 1  # Update the counting variable.
 
