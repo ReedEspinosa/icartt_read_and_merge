@@ -835,7 +835,7 @@ def _handle_input_configuration(DATA: dict):
 def icartt_merger(data_directory: str,
                   mode_input: str,
                   master_timeline: list = [],
-                  output_directory: str = '',
+                  output_directory: str = None,
                   output_filename: str = 'icartt_merge_output',
                   prefix_instr_name: bool = True):
     """Merge a directory of icarrts into a pandas dataframe & save as a pkl.
@@ -878,9 +878,10 @@ def icartt_merger(data_directory: str,
     #                        for each timestep in between startdate and
     #                        end date. So 120 for a 2 minute average.
     #
-    #    (4) output_drectory - OPTIONAL string containing the  abs path where
-    #                         the output file will be written. If not set, the
-    #                        output will be to stored in the  input data_dir.
+    #    (4) output_directory - OPTIONAL string containing the  abs path where
+    #                         the output file will be written. If None, no files
+    #                         will be saved (only returns df and meta). If empty
+    #                         string (''), output will be stored in the input data_dir.
     #
     #    (5) ouptut_filename - OPTIONAL string containing what you'd like the
     #                         output file to be called (not including its
@@ -909,15 +910,16 @@ def icartt_merger(data_directory: str,
     # Loop through parsing the flights & collecting them in a single dataframe.
     df, meta = _main_loop_parse_flights(DATA)
     
-    # Save the Output.
-    filename = os.path.join(DATA['DIR_OUTPUT'], DATA['O_FILENAME'] + '.pkl')
-    df.to_pickle(filename)
-    
-    # Save the metadata to a picke as well.
-    filename_meta = os.path.join(DATA['DIR_OUTPUT'], DATA['O_FILENAME'] + '_meta.pickle')
-    mpu.io.write(filename_meta, meta)
-    
-    # Tell the people where you saved it.
-    print('Output dataframe and metadata saved at:' + filename)
+    # Save the Output only if output_directory is provided (not None).
+    if DATA['DIR_OUTPUT'] is not None:
+        filename = os.path.join(DATA['DIR_OUTPUT'], DATA['O_FILENAME'] + '.pkl')
+        df.to_pickle(filename)
+        
+        # Save the metadata to a picke as well.
+        filename_meta = os.path.join(DATA['DIR_OUTPUT'], DATA['O_FILENAME'] + '_meta.pickle')
+        mpu.io.write(filename_meta, meta)
+        
+        # Tell the people where you saved it.
+        print('Output dataframe and metadata saved at:' + filename)
     
     return df, meta
