@@ -149,28 +149,79 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
 
         if not lim:
             lim = np.round(4350 / min_sep)  # don't fill if collect>than 1H out
+        
         dfn = df.reindex(dts, method='nearest', fill_value=np.nan,
                          limit=int(lim))
 
         # Take a centered boxcar average around the X s avg.
         df_new = dfn.rolling(str(int(step_S)) + 's').mean().resample(str(step_S) + 's').mean()
     else:
-        # The native sampling frequency is longer than X seconds, so just pull
-        # the closest values along to fill our array.
+        # The native sampling frequency is longer than X seconds (min_sep >= step_S)
+        # Use linear interpolation to place values on the desired time grid based on midpoint times
         print(('WARNING: You have input an averaging frequency that is LESS'),
               ('than this instruments average native sampling frequency.'),
-              ('This is dangerous and can lead to errors because it is NOT'),
-              ('interpolating data, but rather "filling from nearest".'),
-              ('Consider raising your input averaging time step.'))
+              ('Using linear interpolation to fill values at the desired time step.'))
         dts = pd.date_range(startdt, enddt, freq=str(step_S) + 's', tz='UTC')
         if not lim:
             # Don't fill if collected > than 1H 15 mins out from here.
             lim = np.round(4350 / min_sep)
             if lim <= 0:
                 lim = 1  # If lim not set and too small, just use 1 point.
+        
+        # Combine original index with target timeline to preserve original data points
+        # This allows interpolation to work between actual data points
+        combined_index = dts.union(df.index).sort_values()
+        df_combined = df.reindex(combined_index)
+        
+        # Use linear interpolation, but only between valid (non-NaN) points
+        # The limit parameter ensures we don't interpolate across large gaps
+        # limit_direction='both' allows interpolation forward and backward
+        df_interp = df_combined.interpolate(method='linear', limit=int(lim), limit_direction='both')
+        
+        # Select only the target timeline points
+        df_new = df_interp.reindex(dts)
+        
+        # Important: pandas interpolate() will interpolate through NaN values if the gap
+        # is within the limit. We need to ensure that if a target point would require
+        # interpolation between two original data points where one or both are NaN (bad data),
+        # the result remains NaN.
+        # 
+        # The limit parameter in interpolate() handles distance, but we still need to check
+        # if the bounding original data points are NaN (bad data flags).
+        
+        # Create a mask for valid interpolated values
+        valid_mask = pd.DataFrame(True, index=dts, columns=df.columns)
+        
+        for col in df.columns:
+            original_series = df[col]
             
-            df_new = df.reindex(dts, method='nearest', fill_value=np.nan,
-                                limit=int(lim))
+            # For each target time, find the nearest original data points before and after
+            for target_time in dts:
+                # Find the two original data points that bracket this target time
+                before_idx = original_series.index[original_series.index <= target_time]
+                after_idx = original_series.index[original_series.index > target_time]
+                
+                if len(before_idx) == 0 or len(after_idx) == 0:
+                    # Outside range of original data
+                    valid_mask.loc[target_time, col] = False
+                    continue
+                
+                # Get the closest points before and after
+                time_before = before_idx[-1]
+                time_after = after_idx[0]
+                
+                # Check if either bounding point is NaN (bad data flag)
+                # This is the key check: pandas interpolate() will interpolate through NaNs,
+                # so we need to explicitly prevent interpolation when bounding points are NaN
+                val_before = original_series.loc[time_before]
+                val_after = original_series.loc[time_after]
+                
+                if pd.isna(val_before) or pd.isna(val_after):
+                    # Interpolating between NaN and valid data (or two NaNs) - invalid
+                    valid_mask.loc[target_time, col] = False
+        
+        # Set invalid interpolated values to NaN
+        df_new = df_new.where(valid_mask)
 
     # Plot the Original Data & the Re- Mapped stuff so you can see if its good:
     if quiet is False:
