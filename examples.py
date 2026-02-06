@@ -27,28 +27,40 @@ df_5min = ict.align2master_timeline(df_fancy, startdate, enddate, tm_step,
 # =============================================================================
 #                          "MERGE_BESIDE" example;
 # ============================================================================
-data_directory = "/Users/wrespino/Downloads/ACTIVATE_TEST"
-output_directory = "/Users/wrespino/Downloads/ACTIVATE_TEST"
-output_filename = 'merged_LAS-SMPS-Optical_outfile'
+icartt_directory = "/Users/wrespino/Downloads/ACTIVATE_TEST"
+pickle_directory = "/Users/wrespino/Downloads/ACTIVATE_TEST"
+pickle_filename = 'merged_LAS-SMPS-Optical_outfile'
 prefix_instr_name = True
 mode_input = 'Merge_Beside'
 master_timeline = ['2020-02-14 00:00:00', '2020-02-16 00:00:00', 5]
 
-df, meta = ict.icartt_merger(data_directory, mode_input, master_timeline,
-                             output_directory, output_filename,
+df, meta = ict.icartt_merger(icartt_directory, mode_input, master_timeline,
+                             pickle_directory, pickle_filename,
                              prefix_instr_name)
 
 """
 # =============================================================================
 #                          "STACK_ON_TOP" example;
 # =============================================================================
-data_directory = "C:\\Users\\myusername\\Data\\icartts\\"
-output_directory = "C:\\Users\\myusername\\Data\\outputs\\"
-output_filename = 'special_name_outfile'
+icartt_directory = "C:\\Users\\myusername\\Data\\icartts\\"
+pickle_directory = "C:\\Users\\myusername\\Data\\outputs\\"
+pickle_filename = 'special_name_outfile'
 mode_input = 'Stack_On_Top'
 
-df, meta = ict.icartt_merger(data_directory, mode_input,
-                             output_directory=output_directory,
-                             output_filename=output_filename,
+df, meta = ict.icartt_merger(icartt_directory, mode_input,
+                             pickle_directory=pickle_directory,
+                             pickle_filename=pickle_filename,
                              prefix_instr_name=False)
+
+# =============================================================================
+#                          "LOAD_PICKLE" example;
+# =============================================================================
+# Load previously saved pickle files
+pickle_directory = "C:\\Users\\myusername\\Data\\outputs\\"
+pickle_filename = 'special_name_outfile'
+mode_input = 'Load_Pickle'
+
+df, meta = ict.icartt_merger(mode_input=mode_input,
+                             pickle_directory=pickle_directory,
+                             pickle_filename=pickle_filename)
 """

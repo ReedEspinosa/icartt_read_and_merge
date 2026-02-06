@@ -853,6 +853,10 @@ def _main_loop_parse_flights(DATA: dict):
 
 def _handle_input_configuration(DATA: dict):
     """Make sure user passed appropriate input."""
+    # icartt_directory validation only needed for non-Load_Pickle modes
+    if DATA['DIR_ICARTT'] is None:
+        _exit_with_error("icartt_directory must be specified for this mode")
+
     print('1. Input ICARTT directory:' + DATA['DIR_ICARTT'])
 
     # 1. Ensure ICARTT directory is valid.
@@ -883,26 +887,27 @@ def _handle_input_configuration(DATA: dict):
     return DATA  # give input back with the list of icartts now included.
 
 
-def icartt_merger(data_directory: str,
-                  mode_input: str,
+def icartt_merger(icartt_directory: str = None,
+                  mode_input: str = None,
                   master_timeline: list = [],
-                  output_directory: str = None,
-                  output_filename: str = 'icartt_merge_output',
+                  pickle_directory: str = None,
+                  pickle_filename: str = 'icartt_merge_output',
                   prefix_instr_name: bool = True):
     """Merge a directory of icarrts into a pandas dataframe & save as a pkl.
-    
+
     # ========================================================================
     # ========================    INPUTS   ===================================
     # ========================================================================
     #
-    #   (1) data_directory - A string containing the absolute path to a folder
+    #   (1) icartt_directory - A string containing the absolute path to a folder
     #                      which contains all the individual icartt files that
-    #                      you wish to merge together.
+    #                      you wish to merge together. Not required if
+    #                      mode_input='Load_Pickle'.
     #
     #   (2) mode_input - A string describing HOW you would like to merge these
-    #                    icartt files in the data_directory together. Only 2
-    #                    valid options are supported right now.  Either
-    #                    "Stack_On_Top" or "Merge_Beside".
+    #                    icartt files in the icartt_directory together. Valid
+    #                    options are "Stack_On_Top", "Merge_Beside", or
+    #                    "Load_Pickle".
     #
     #     "Stack_On_Top": Each icartt file is for a different date,
     #      but contains data from multiple instruments or mutltiple
@@ -916,8 +921,12 @@ def icartt_merger(data_directory: str,
     #      on the same time base, throughout the whole period. The contents
     #      of each icartt file will be "merged beside" one another.
     #
-    #   (3) master_timeline - OPTIONAL if "Stack_On_Top", required if
-    #                        "Merge_Beside". It is list with 3 items:
+    #     "Load_Pickle": Load previously saved pickle files from
+    #      pickle_directory instead of processing icartt files.
+    #      Requires pickle_directory and pickle_filename to be specified.
+    #
+    #   (3) master_timeline - OPTIONAL if "Stack_On_Top" or "Load_Pickle",
+    #                        required if "Merge_Beside". It is list with 3 items:
     #
     #       -  Startdate_str:  A string containing the start date of the
     #                        "mastertimeline" that all data  will be
@@ -929,12 +938,13 @@ def icartt_merger(data_directory: str,
     #                        for each timestep in between startdate and
     #                        end date. So 120 for a 2 minute average.
     #
-    #    (4) output_directory - OPTIONAL string containing the  abs path where
+    #    (4) pickle_directory - OPTIONAL string containing the abs path where
     #                         the output file will be written. If None, no files
     #                         will be saved (only returns df and meta). If empty
-    #                         string (''), output will be stored in the input data_dir.
+    #                         string (''), output will be stored in the input icartt_dir.
+    #                         REQUIRED if mode_input='Load_Pickle'.
     #
-    #    (5) ouptut_filename - OPTIONAL string containing what you'd like the
+    #    (5) pickle_filename - OPTIONAL string containing what you'd like the
     #                         output file to be called (not including its
     #                         extension). Default is 'icartt_merge_output'
     #
@@ -947,10 +957,34 @@ def icartt_merger(data_directory: str,
     #
     # ========================================================================
     """
+    # If mode is Load_Pickle, load the pickle files and return
+    if mode_input == 'Load_Pickle':
+        if pickle_directory is None:
+            _exit_with_error("pickle_directory must be specified when mode_input='Load_Pickle'")
+
+        # Load the dataframe pickle
+        df_path = os.path.join(pickle_directory, pickle_filename + '.pkl')
+        if not os.path.exists(df_path):
+            _exit_with_error(f"Pickle file not found: {df_path}")
+
+        print(f"Loading dataframe from: {df_path}")
+        df = pd.read_pickle(df_path)
+
+        # Load the metadata pickle
+        meta_path = os.path.join(pickle_directory, pickle_filename + '_meta.pickle')
+        if not os.path.exists(meta_path):
+            _exit_with_error(f"Metadata pickle file not found: {meta_path}")
+
+        print(f"Loading metadata from: {meta_path}")
+        meta = mpu.io.read(meta_path)
+
+        print("Successfully loaded pickle files.")
+        return df, meta
+
     # Format the input for easier referencing.
-    inputs = {'DIR_ICARTT': data_directory,
-              'DIR_OUTPUT': output_directory,
-              'O_FILENAME': output_filename,
+    inputs = {'DIR_ICARTT': icartt_directory,
+              'DIR_OUTPUT': pickle_directory,
+              'O_FILENAME': pickle_filename,
               'MODE': mode_input,
               'PREFIX_OPT': prefix_instr_name,
               'MSTR_TMLN': master_timeline}

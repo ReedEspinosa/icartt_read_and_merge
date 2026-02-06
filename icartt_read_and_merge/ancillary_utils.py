@@ -7,19 +7,19 @@ import pandas as pd
 from typing import Dict, List
 
 
-def read_size_distribution_radii(df: pd.DataFrame, data_directory: str) -> Dict[str, List[float]]:
+def read_size_distribution_radii(df: pd.DataFrame, icartt_directory: str) -> Dict[str, List[float]]:
     """
     Read radii information for size distribution variables from ICARTT files.
-    
+
     This function identifies size distribution instruments in the dataframe,
     searches for their corresponding ICARTT files, and extracts the "Mid Points"
     from the OTHER_COMMENTS header field.
-    
+
     Parameters
     ----------
     df : pandas.DataFrame
         Merged dataframe from icartt_merger() containing size distribution columns
-    data_directory : str
+    icartt_directory : str
         Directory containing the ICARTT files to search
         
     Returns
@@ -67,15 +67,15 @@ def read_size_distribution_radii(df: pd.DataFrame, data_directory: str) -> Dict[
         # Step 2: Search for files containing "-{instrument}_" pattern
         pattern = f"-{inst_type}_"
         matching_files = []
-        
-        for root, dirs, files in os.walk(data_directory):
+
+        for root, dirs, files in os.walk(icartt_directory):
             for f in files:
                 if f.endswith('.ict') and pattern in f:
                     filepath = os.path.join(root, f)
                     matching_files.append(filepath)
-        
+
         if not matching_files:
-            print(f"Warning: No files found matching pattern '-{inst_type}_' in {data_directory}")
+            print(f"Warning: No files found matching pattern '-{inst_type}_' in {icartt_directory}")
             continue
         
         matching_files = sorted(matching_files)  # Sort for consistency
