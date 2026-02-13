@@ -80,6 +80,59 @@ def _crawl_directory(path: str, extension: str = None):
     return selected_files
 
 
+def _filter_files_by_date_range(icartt_files: list, start_date_str: str,
+                                 end_date_str: str):
+    """Filter ICARTT files to only include those within the date range.
+
+    Parameters:
+        icartt_files: List of ICARTT file paths
+        start_date_str: Start date string in format 'YYYY-MM-DD HH:MM:SS'
+        end_date_str: End date string in format 'YYYY-MM-DD HH:MM:SS'
+
+    Returns:
+        Filtered list of ICARTT file paths
+    """
+    # Convert start and end date strings to datetime objects (just the date part)
+    start_date = pd.to_datetime(start_date_str).date()
+    end_date = pd.to_datetime(end_date_str).date()
+
+    filtered_files = []
+    skipped_files = []
+
+    for ict in icartt_files:
+        # Extract date from filename (format: YYYYMMDD)
+        date_match = re.search(r'\d{8}', ict)
+
+        if date_match is None:
+            # If no date found in filename, include it (be conservative)
+            _warn(f"No date found in filename '{os.path.basename(ict)}', including anyway")
+            filtered_files.append(ict)
+            continue
+
+        # Parse the date from the filename
+        date_str = date_match.group(0)
+        try:
+            file_date = datetime.datetime.strptime(date_str, '%Y%m%d').date()
+
+            # Check if file date is within range
+            if start_date <= file_date <= end_date:
+                filtered_files.append(ict)
+            else:
+                skipped_files.append(ict)
+        except ValueError:
+            # If date parsing fails, include the file (be conservative)
+            _warn(f"Could not parse date '{date_str}' in filename '{os.path.basename(ict)}', including anyway")
+            filtered_files.append(ict)
+
+    # Print summary of filtering
+    if skipped_files:
+        print(f" - Skipped {len(skipped_files)} file(s) outside date range:")
+        for f in skipped_files:
+            print(f"   - {os.path.basename(f)}")
+
+    return filtered_files
+
+
 def _organize_standard_and_multileg_flights(DATA: dict):
     """Organize the Multileg flights & parse them."""
     # A regular expression catches the multi leg flight suffix.
@@ -870,7 +923,21 @@ def _handle_input_configuration(DATA: dict):
         # If no icartts were found, exit and notify user.
         _exit_with_error("No ICARTT files found in the input directory.")
     else:  # Else, inform on the number of ICARTT files
-        print(" - Found [ {} ] ICARTTs.\n".format(len(DATA['ICARTT_FILES'])))
+        print(" - Found [ {} ] ICARTTs.".format(len(DATA['ICARTT_FILES'])))
+
+    # 2b. Filter files by date range if master_timeline is provided
+    if bool(DATA.get('MSTR_TMLN')) is True:
+        print(" - Filtering files by date range...")
+        DATA['ICARTT_FILES'] = _filter_files_by_date_range(
+            DATA['ICARTT_FILES'],
+            DATA['MSTR_TMLN'][0],
+            DATA['MSTR_TMLN'][1]
+        )
+        if len(DATA['ICARTT_FILES']) == 0:
+            _exit_with_error("No ICARTT files found within the specified date range.")
+        print(" - [ {} ] ICARTTs remain after date filtering.\n".format(len(DATA['ICARTT_FILES'])))
+    else:
+        print()
 
     # 3. Check that a valid mode has been passed
     valid_modes = ['Stack_On_Top', 'Merge_Beside']
@@ -994,7 +1061,15 @@ def icartt_merger(icartt_directory: str = None,
     
     # Loop through parsing the flights & collecting them in a single dataframe.
     df, meta = _main_loop_parse_flights(DATA)
-    
+
+    # Remove rows where all data columns (excluding time index) are NaN
+    # This significantly reduces file size for wide time windows with sparse data
+    initial_rows = len(df)
+    df = df.dropna(how='all')
+    rows_removed = initial_rows - len(df)
+    if rows_removed > 0:
+        print(f'Removed {rows_removed} rows with all NaN values ({rows_removed/initial_rows*100:.1f}% of data)')
+
     # Save the Output only if output_directory is provided (not None).
     if DATA['DIR_OUTPUT'] is not None:
         filename = os.path.join(DATA['DIR_OUTPUT'], DATA['O_FILENAME'] + '.pkl')
