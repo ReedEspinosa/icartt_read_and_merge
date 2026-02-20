@@ -812,12 +812,14 @@ def _process_single_flight(args):
     if type(icartt) is list:
         df_data, meta = _read_icartt_multileg(icartt, flt_num=flt_num,
                                                meta=meta, instr_name_prefix=prefix_opt)
+        icartt_file = icartt[0]  # Use first leg filename for date extraction
     elif type(icartt) is str:
         add_file_no = True if mode == 'Stack_On_Top' else None
         df_data, meta = read_icartt(icartt, flt_num=flt_num, meta=meta,
                                      instr_name_prefix=prefix_opt, add_file_no=add_file_no)
+        icartt_file = icartt
 
-    df_data, times = master_icartt_time_parser(df_data, icartt, quiet=True, remove_old_time=True)
+    df_data, times = master_icartt_time_parser(df_data, icartt_file, quiet=True, remove_old_time=True)
 
     if mode == 'Merge_Beside' and mstr_tmln:
         df_data = align2master_timeline(df_data, mstr_tmln[0], mstr_tmln[1],
