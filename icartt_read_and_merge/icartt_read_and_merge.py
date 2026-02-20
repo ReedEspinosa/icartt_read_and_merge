@@ -795,7 +795,7 @@ def _read_icartt_multileg(icartt_file: str, flt_num: int = None, meta:
     # Single concat at end - much faster than repeated append
     df = pd.concat(df_list, ignore_index=True)
 
-    return df  # Return the merged df
+    return df, meta  # Return the merged df and updated metadata
 
 
 def _process_single_flight(args):
