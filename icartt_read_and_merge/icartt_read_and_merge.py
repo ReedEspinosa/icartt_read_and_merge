@@ -879,22 +879,20 @@ def _main_loop_parse_flights(DATA: dict):
     if DATA['MODE'] == 'Stack_On_Top':
         df_all = pd.concat(df_list, ignore_index=True)
     else:  # Merge_Beside mode
-        # Handle duplicate column names when prefix_instr_name=False
-        if not DATA['PREFIX_OPT']:
-            df_all = df_list[0]
-            for df_data in df_list[1:]:
-                overlapping_cols = set(df_all.columns) & set(df_data.columns)
-                non_overlapping_cols = set(df_data.columns) - overlapping_cols
+        # Handle duplicate column names - can occur even with prefix_instr_name=True
+        # when multiple files come from the same instrument
+        df_all = df_list[0]
+        for df_data in df_list[1:]:
+            overlapping_cols = set(df_all.columns) & set(df_data.columns)
+            non_overlapping_cols = set(df_data.columns) - overlapping_cols
 
-                if overlapping_cols:
-                    for col in overlapping_cols:
-                        df_all[col] = df_all[col].combine_first(df_data[col])
-                    if non_overlapping_cols:
-                        df_all = pd.concat([df_all, df_data[list(non_overlapping_cols)]], axis=1)
-                else:
-                    df_all = pd.concat([df_all, df_data], axis=1)
-        else:
-            df_all = pd.concat(df_list, axis=1)
+            if overlapping_cols:
+                for col in overlapping_cols:
+                    df_all[col] = df_all[col].combine_first(df_data[col])
+                if non_overlapping_cols:
+                    df_all = pd.concat([df_all, df_data[list(non_overlapping_cols)]], axis=1)
+            else:
+                df_all = pd.concat([df_all, df_data], axis=1)
 
     # Check if the User wants us to align the Stacked data to a master timeline
     # Aligns AFTER all icartts have been loaded in.
