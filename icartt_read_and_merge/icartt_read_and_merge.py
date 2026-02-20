@@ -242,37 +242,37 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
         # The limit parameter in interpolate() handles distance, but we still need to check
         # if the bounding original data points are NaN (bad data flags).
         
-        # Create a mask for valid interpolated values
-        valid_mask = pd.DataFrame(True, index=dts, columns=df.columns)
-        
-        for col in df.columns:
-            original_series = df[col]
-            
-            # For each target time, find the nearest original data points before and after
-            for target_time in dts:
-                # Find the two original data points that bracket this target time
-                before_idx = original_series.index[original_series.index <= target_time]
-                after_idx = original_series.index[original_series.index > target_time]
-                
-                if len(before_idx) == 0 or len(after_idx) == 0:
-                    # Outside range of original data
-                    valid_mask.loc[target_time, col] = False
-                    continue
-                
-                # Get the closest points before and after
-                time_before = before_idx[-1]
-                time_after = after_idx[0]
-                
-                # Check if either bounding point is NaN (bad data flag)
-                # This is the key check: pandas interpolate() will interpolate through NaNs,
-                # so we need to explicitly prevent interpolation when bounding points are NaN
-                val_before = original_series.loc[time_before]
-                val_after = original_series.loc[time_after]
-                
-                if pd.isna(val_before) or pd.isna(val_after):
-                    # Interpolating between NaN and valid data (or two NaNs) - invalid
-                    valid_mask.loc[target_time, col] = False
-        
+        # Create a mask for valid interpolated values (vectorized via searchsorted).
+        # For each target time we need to know if both bounding original data
+        # points are non-NaN.  The previous per-target-time loop was O(N*M*K);
+        # this version is O(N*log(M) + N*K) where N=target pts, M=original pts,
+        # K=columns — orders-of-magnitude faster for 1-second output grids.
+        orig_times_ns = np.asarray(df.index.astype(np.int64))
+        target_times_ns = np.asarray(dts.astype(np.int64))
+
+        # insert_pos[i] = index of first original time STRICTLY > target[i]
+        insert_pos = np.searchsorted(orig_times_ns, target_times_ns, side='right')
+
+        # Out-of-range: no original point before (0) or no point after (n)
+        n_orig = len(orig_times_ns)
+        out_of_range = (insert_pos == 0) | (insert_pos >= n_orig)
+
+        # Clipped indices for safe array access (out-of-range rows handled by mask)
+        before_idx_arr = np.clip(insert_pos - 1, 0, n_orig - 1)
+        after_idx_arr  = np.clip(insert_pos,     0, n_orig - 1)
+
+        # Numeric values at bracketing original points for every target time
+        df_vals = df.values.astype(float)          # (n_orig, n_cols)
+        vals_before = df_vals[before_idx_arr, :]   # (n_target, n_cols)
+        vals_after  = df_vals[after_idx_arr,  :]
+
+        # Invalid if out-of-range OR either bounding value is NaN
+        invalid = (out_of_range[:, np.newaxis] |
+                   np.isnan(vals_before) |
+                   np.isnan(vals_after))
+
+        valid_mask = pd.DataFrame(~invalid, index=dts, columns=df.columns)
+
         # Set invalid interpolated values to NaN
         df_new = df_new.where(valid_mask)
 
