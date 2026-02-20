@@ -744,13 +744,9 @@ def read_icartt(icartt_file: str, flt_num: int = None, meta: dict = {},
     column_names = list(df.columns)
     # Now read the actual data starting from the row after the header
     df = pd.read_csv(icartt_file, skiprows=header_row_num + 1, names=column_names, delimiter=",", skipinitialspace=True)
-    
-    # Set possible error values to NaNs.
-    df.replace(-9, np.nan, inplace=True)
-    df.replace(-99, np.nan, inplace=True)
-    df.replace(-999, np.nan, inplace=True)
-    df.replace(-9999, np.nan, inplace=True)
-    df.replace(-99999, np.nan, inplace=True)
+
+    # Set possible error values to NaNs - single vectorized operation instead of 5 scans
+    df.mask(df.isin([-9, -99, -999, -9999, -99999]), np.nan, inplace=True)
     
     # Strip leading/tailing white space around variable names
     df.columns = [c.strip() for c in list(df.columns)]
@@ -784,7 +780,7 @@ def _read_icartt_multileg(icartt_file: str, flt_num: int = None, meta:
     # Sort the list of input ICARTTs.
     icartts = sorted(icartt_file)
 
-    df = None  # Set an empty merged flight data data frame for this leg
+    df_list = []  # Accumulate dataframes in list for single concat
 
     for ict in icartts:  # Loop over the dif ICARTT Legs
         # Parse individual file
@@ -792,11 +788,11 @@ def _read_icartt_multileg(icartt_file: str, flt_num: int = None, meta:
                                    instr_name_prefix=instr_name_prefix)
         meta = meta_i  # update metadata file... gets appended upstream.
 
-        # If df for merged is still None, set to first iter. Otherwise append.
-        if df is None:
-            df = df_i
-        else:
-            df = df.append(df_i, ignore_index=True)
+        # Accumulate dataframe in list
+        df_list.append(df_i)
+
+    # Single concat at end - much faster than repeated append
+    df = pd.concat(df_list, ignore_index=True)
 
     return df  # Return the merged df
 
@@ -807,6 +803,10 @@ def _main_loop_parse_flights(DATA: dict):
     DATA['FLIGHTS'] = _organize_standard_and_multileg_flights(DATA)
 
     ct = 1  # Initialize number of flights you're looping over.
+
+    # Accumulate dataframes in lists for single concat at end
+    df_list_stack = []  # For Stack_On_Top mode
+    df_list_merge = []  # For Merge_Beside mode
 
     # Loop over the ICARTT files in the data directory.
     for flight, icartt in DATA['FLIGHTS'].items():
@@ -857,39 +857,44 @@ def _main_loop_parse_flights(DATA: dict):
                                             datetime_index=False)
             # Should come out with a datetime index we can merge along!
 
-        if ct == 1:  # If first icartt file, make the larger dataframe!
-            df_all = df_data
-        else:
-            if DATA['MODE'] == 'Stack_On_Top':
-                # For all subsequent loops append the new one UNDER the old df
-                df_all = pd.concat([df_all, df_data], ignore_index=True)
-            else:
-                # For all subsequent loops append new columns to existing df
-                # along the same index.
-                # Handle duplicate column names when prefix_instr_name=False
-                if not DATA['PREFIX_OPT']:
-                    # Check for duplicate column names before merging
-                    overlapping_cols = set(df_all.columns) & set(df_data.columns)
-                    non_overlapping_cols = set(df_data.columns) - overlapping_cols
-                    
-                    if overlapping_cols:
-                        # For overlapping columns, combine them by filling NaN values
-                        # Since files represent different time windows, data shouldn't overlap
-                        for col in overlapping_cols:
-                            # Fill NaN values in df_all[col] with values from df_data[col]
-                            # Use combine_first to merge, prioritizing df_all but filling with df_data
-                            df_all[col] = df_all[col].combine_first(df_data[col])
-                        
-                        # Add non-overlapping columns normally
-                        if non_overlapping_cols:
-                            df_all = pd.concat([df_all, df_data[list(non_overlapping_cols)]], axis=1)
-                    else:
-                        # No overlapping columns, merge normally
-                        df_all = pd.concat([df_all, df_data], axis=1)
-                else:
-                    df_all = pd.concat([df_all, df_data], axis=1)
+        # Accumulate dataframes in appropriate list
+        if DATA['MODE'] == 'Stack_On_Top':
+            df_list_stack.append(df_data)
+        else:  # Merge_Beside mode
+            df_list_merge.append(df_data)
 
         ct += 1  # Update the counting variable.
+
+    # Single concat operation at the end based on mode
+    if DATA['MODE'] == 'Stack_On_Top':
+        # Concatenate all dataframes vertically (stack on top)
+        df_all = pd.concat(df_list_stack, ignore_index=True)
+    else:  # Merge_Beside mode
+        # Handle duplicate column names when prefix_instr_name=False
+        if not DATA['PREFIX_OPT']:
+            # Need to handle overlapping columns across all dataframes
+            # Start with the first dataframe
+            df_all = df_list_merge[0]
+
+            # Merge remaining dataframes one at a time (can't avoid this for overlapping cols)
+            for df_data in df_list_merge[1:]:
+                overlapping_cols = set(df_all.columns) & set(df_data.columns)
+                non_overlapping_cols = set(df_data.columns) - overlapping_cols
+
+                if overlapping_cols:
+                    # For overlapping columns, combine them by filling NaN values
+                    for col in overlapping_cols:
+                        df_all[col] = df_all[col].combine_first(df_data[col])
+
+                    # Add non-overlapping columns
+                    if non_overlapping_cols:
+                        df_all = pd.concat([df_all, df_data[list(non_overlapping_cols)]], axis=1)
+                else:
+                    # No overlapping columns, merge normally
+                    df_all = pd.concat([df_all, df_data], axis=1)
+        else:
+            # No duplicate columns possible - single concat horizontally
+            df_all = pd.concat(df_list_merge, axis=1)
 
     # Check if the User wants us to align the Stacked data to a master timeline
     # Aligns AFTER all icartts have been loaded in.
