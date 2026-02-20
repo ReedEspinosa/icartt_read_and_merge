@@ -33,6 +33,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import datetime
 import mpu
+from multiprocessing import Pool
 
 
 def _warn(message: str = "( miscellaneous warning )"):
@@ -797,113 +798,110 @@ def _read_icartt_multileg(icartt_file: str, flt_num: int = None, meta:
     return df  # Return the merged df
 
 
+def _process_single_flight(args):
+    """Process a single flight file. Designed for parallel execution via multiprocessing.Pool."""
+    flight, icartt, flt_num, mode, prefix_opt, mstr_tmln = args
+
+    print(f" - Processing: {os.path.basename(flight)}")
+
+    # Fresh meta dict per file (no shared state)
+    meta = {'Instruments': {}, 'Data_Info': {}, 'Instrument_Info': {},
+            'PI_Info': {}, 'Uncertainty': {}, 'Revision': {},
+            'Stipulations': {}, 'Institution_Info': {}}
+
+    if type(icartt) is list:
+        df_data, meta = _read_icartt_multileg(icartt, flt_num=flt_num,
+                                               meta=meta, instr_name_prefix=prefix_opt)
+    elif type(icartt) is str:
+        add_file_no = True if mode == 'Stack_On_Top' else None
+        df_data, meta = read_icartt(icartt, flt_num=flt_num, meta=meta,
+                                     instr_name_prefix=prefix_opt, add_file_no=add_file_no)
+
+    df_data, times = master_icartt_time_parser(df_data, icartt, quiet=True, remove_old_time=True)
+
+    if mode == 'Merge_Beside' and mstr_tmln:
+        df_data = align2master_timeline(df_data, mstr_tmln[0], mstr_tmln[1],
+                                         mstr_tmln[2], quiet=True, datetime_index=False)
+
+    return flt_num, df_data, meta
+
+
+def _merge_meta_dicts(meta_list):
+    """Merge a list of per-file meta dicts into one combined dict."""
+    combined = {'Instruments': {}, 'Data_Info': {}, 'Instrument_Info': {},
+                'PI_Info': {}, 'Uncertainty': {}, 'Revision': {},
+                'Stipulations': {}, 'Institution_Info': {}}
+    for m in meta_list:
+        for key in combined:
+            if isinstance(m[key], dict):
+                combined[key].update(m[key])
+            else:
+                combined[key] = m[key]
+    return combined
+
+
 def _main_loop_parse_flights(DATA: dict):
     """Looper for parsing indv flights in a directory."""
     # Make groupings of standard and multileg flights.
     DATA['FLIGHTS'] = _organize_standard_and_multileg_flights(DATA)
 
-    ct = 1  # Initialize number of flights you're looping over.
+    n_workers = DATA.get('N_WORKERS', 1)
+    mstr_tmln = DATA.get('MSTR_TMLN', None)
 
-    # Accumulate dataframes in lists for single concat at end
-    df_list_stack = []  # For Stack_On_Top mode
-    df_list_merge = []  # For Merge_Beside mode
+    # Build args list: pre-assign flight numbers by enumerating flights
+    args_list = []
+    for ct, (flight, icartt) in enumerate(DATA['FLIGHTS'].items(), start=1):
+        args_list.append((flight, icartt, ct, DATA['MODE'],
+                          DATA['PREFIX_OPT'], mstr_tmln))
 
-    # Loop over the ICARTT files in the data directory.
-    for flight, icartt in DATA['FLIGHTS'].items():
+    # Print summary before dispatching
+    print(f"\nProcessing {len(args_list)} flight(s) with {n_workers} worker(s)...")
 
-        # Tell the people which file you're processing:
-        print("\n - [ {} / {} ] {} ".format(
-            ct, len(DATA['FLIGHTS']), os.path.basename(flight)))
+    # Process files either sequentially or in parallel
+    if n_workers == 1:
+        results = [_process_single_flight(a) for a in args_list]
+    else:
+        with Pool(n_workers) as pool:
+            results = pool.map(_process_single_flight, args_list)
 
-        if int(ct) == 1:  # Initialize empty dictionary to store metadata
-            meta = {'Instruments': {}, 'Data_Info': {}, 'Instrument_Info': {},
-                    'PI_Info': {}, 'Uncertainty': {}, 'Revision': {},
-                    'Stipulations': {}, 'Institution_Info': {}}
+    # Sort results by flight number to ensure deterministic order
+    results.sort(key=lambda r: r[0])
 
-        # If the type(icartt) is a list, must be MULTI-LEG flight.
-        if type(icartt) is list:
-            # Handle multileg flight so it is merged to single df.
-            df_data, new_meta = _read_icartt_multileg(icartt, flt_num=int(ct),
-                                                      meta=meta,
-                                                      instr_name_prefix=DATA
-                                                      ['PREFIX_OPT'])
-            meta = new_meta  # Update the metadata dict to be the new one.
+    # Merge all meta dicts
+    meta = _merge_meta_dicts([r[2] for r in results])
 
-        # Else if the type(icartt) is a string, parse SINGLE flight (not leg)
-        elif type(icartt) is str:
-            add_file_no = False
-            add_file_no = True if DATA['MODE'] == 'Stack_On_Top' else None
+    # Collect dataframes in flight-number order
+    df_list = [r[1] for r in results]
 
-            # Call the parse_icartt_table directly, pass existing meta dict.
-            df_data, new_meta = read_icartt(icartt, flt_num=int(ct),
-                                            meta=meta, instr_name_prefix=DATA
-                                            ['PREFIX_OPT'],
-                                            add_file_no=add_file_no)
-            meta = new_meta  # Update the metadata dict to be the new one.
-
-        # Parse the string date columns in the indv icartt, and pick which
-        # one to use, then convert it to a datetime object.
-        df_data, times = master_icartt_time_parser(df_data, icartt,
-                                                    quiet=True,
-                                                    remove_old_time=True)
-
-        if DATA['MODE'] == 'Merge_Beside':
-            # To merge beside, must get all dfs must be on the SAME
-            # time axis... so align them to a master timeline.
-            # Aligns each file after its opened.
-            tmln = DATA['MSTR_TMLN']  # wouldn't want to index twice!
-            df_data = align2master_timeline(df_data, tmln[0], tmln[1],
-                                            tmln[2], quiet=True,
-                                            datetime_index=False)
-            # Should come out with a datetime index we can merge along!
-
-        # Accumulate dataframes in appropriate list
-        if DATA['MODE'] == 'Stack_On_Top':
-            df_list_stack.append(df_data)
-        else:  # Merge_Beside mode
-            df_list_merge.append(df_data)
-
-        ct += 1  # Update the counting variable.
-
-    # Single concat operation at the end based on mode
+    # Concatenate based on mode
     if DATA['MODE'] == 'Stack_On_Top':
-        # Concatenate all dataframes vertically (stack on top)
-        df_all = pd.concat(df_list_stack, ignore_index=True)
+        df_all = pd.concat(df_list, ignore_index=True)
     else:  # Merge_Beside mode
         # Handle duplicate column names when prefix_instr_name=False
         if not DATA['PREFIX_OPT']:
-            # Need to handle overlapping columns across all dataframes
-            # Start with the first dataframe
-            df_all = df_list_merge[0]
-
-            # Merge remaining dataframes one at a time (can't avoid this for overlapping cols)
-            for df_data in df_list_merge[1:]:
+            df_all = df_list[0]
+            for df_data in df_list[1:]:
                 overlapping_cols = set(df_all.columns) & set(df_data.columns)
                 non_overlapping_cols = set(df_data.columns) - overlapping_cols
 
                 if overlapping_cols:
-                    # For overlapping columns, combine them by filling NaN values
                     for col in overlapping_cols:
                         df_all[col] = df_all[col].combine_first(df_data[col])
-
-                    # Add non-overlapping columns
                     if non_overlapping_cols:
                         df_all = pd.concat([df_all, df_data[list(non_overlapping_cols)]], axis=1)
                 else:
-                    # No overlapping columns, merge normally
                     df_all = pd.concat([df_all, df_data], axis=1)
         else:
-            # No duplicate columns possible - single concat horizontally
-            df_all = pd.concat(df_list_merge, axis=1)
+            df_all = pd.concat(df_list, axis=1)
 
     # Check if the User wants us to align the Stacked data to a master timeline
     # Aligns AFTER all icartts have been loaded in.
     if (DATA['MODE'] == 'Stack_On_Top') and (bool(DATA.get('MSTR_TMLN'))
                                              is True):
-        tmln = DATA['MSTR_TMLN']  # wouldn't want to index twice!
+        tmln = DATA['MSTR_TMLN']
         df_all = align2master_timeline(df_all, tmln[0], tmln[1], tmln[2],
                                        quiet=True, datetime_index=False)
-    elif (DATA['MODE'] == 'Stack_On_Top'):  # Make file # and datetime indexes.
+    elif (DATA['MODE'] == 'Stack_On_Top'):
         df_all = df_all.set_index(['datetime', 'Flight_N'])
 
     return df_all, meta
@@ -964,7 +962,8 @@ def icartt_merger(icartt_directory: str = None,
                   master_timeline: list = [],
                   pickle_directory: str = None,
                   pickle_filename: str = 'icartt_merge_output',
-                  prefix_instr_name: bool = True):
+                  prefix_instr_name: bool = True,
+                  n_workers: int = 1):
     """Merge a directory of icarrts into a pandas dataframe & save as a pkl.
 
     # ========================================================================
@@ -1027,6 +1026,10 @@ def icartt_merger(icartt_directory: str = None,
     #                         icartt files it is common to have some PI's
     #                         measuring the same items & naming them the same.
     #
+    #    (7) n_workers - OPTIONAL integer specifying the number of parallel
+    #                    workers for processing ICARTT files. Default is 1
+    #                    (sequential). Values > 1 use multiprocessing.Pool.
+    #
     # ========================================================================
     """
     # If mode is Load_Pickle, load the pickle files and return
@@ -1059,7 +1062,8 @@ def icartt_merger(icartt_directory: str = None,
               'O_FILENAME': pickle_filename,
               'MODE': mode_input,
               'PREFIX_OPT': prefix_instr_name,
-              'MSTR_TMLN': master_timeline}
+              'MSTR_TMLN': master_timeline,
+              'N_WORKERS': n_workers}
 
     # Make sure you got appropriate inputs from the user, retrieve icartt files
     DATA = _handle_input_configuration(inputs)
