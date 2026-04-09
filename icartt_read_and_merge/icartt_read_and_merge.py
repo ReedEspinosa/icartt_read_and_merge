@@ -194,16 +194,33 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
     if quiet is False:
         print('Native Mean Time Sep. (s): ', str(min_sep) + 's')
 
+    # Clip the working time window to the actual data range + buffer.
+    # This avoids creating million-row grids when the master timeline spans
+    # weeks but each file only has a few hours of data.
+    # Buffer must cover the interpolation reach (lim * min_sep seconds,
+    # default ~4350s = 72.5 min) so edge values are computed identically
+    # to the unclipped case.
+    data_min = df.index.min()
+    data_max = df.index.max()
+    lim_seconds = lim * min_sep if lim else 4350
+    buffer = pd.Timedelta(seconds=max(lim_seconds, 300))  # at least 5 min
+    full_start = pd.Timestamp(startdt, tz=tzf)
+    full_end = pd.Timestamp(enddt, tz=tzf)
+    # Floor/ceil to integer seconds so the clipped grid stays aligned with
+    # the full grid (which starts on an integer second).
+    clip_start = max(full_start, (data_min - buffer).floor('s'))
+    clip_end = min(full_end, (data_max + buffer).ceil('s'))
+
     # If the native time seperation is less than X seconds, you'll
     # reindex it to our full date range, as close to native  freq as you can,
     # then take a roliing avg to get the X second avg on the time base we want
     if min_sep < step_S:
-        dts = pd.date_range(startdt, enddt, freq=str(min_sep) + 's',
+        dts = pd.date_range(clip_start, clip_end, freq=str(min_sep) + 's',
                             tz=tzf)
 
         if not lim:
             lim = np.round(4350 / min_sep)  # don't fill if collect>than 1H out
-        
+
         dfn = df.reindex(dts, method='nearest', fill_value=np.nan,
                          limit=int(lim))
 
@@ -215,34 +232,34 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
         print(('WARNING: You have input an averaging frequency that is LESS'),
               ('than this instruments average native sampling frequency.'),
               ('Using linear interpolation to fill values at the desired time step.'))
-        dts = pd.date_range(startdt, enddt, freq=str(step_S) + 's', tz='UTC')
+        dts = pd.date_range(clip_start, clip_end, freq=str(step_S) + 's', tz='UTC')
         if not lim:
             # Don't fill if collected > than 1H 15 mins out from here.
             lim = np.round(4350 / min_sep)
             if lim <= 0:
                 lim = 1  # If lim not set and too small, just use 1 point.
-        
+
         # Combine original index with target timeline to preserve original data points
         # This allows interpolation to work between actual data points
         combined_index = dts.union(df.index).sort_values()
         df_combined = df.reindex(combined_index)
-        
+
         # Use linear interpolation, but only between valid (non-NaN) points
         # The limit parameter ensures we don't interpolate across large gaps
         # limit_direction='both' allows interpolation forward and backward
         df_interp = df_combined.interpolate(method='linear', limit=int(lim), limit_direction='both')
-        
+
         # Select only the target timeline points
         df_new = df_interp.reindex(dts)
-        
+
         # Important: pandas interpolate() will interpolate through NaN values if the gap
         # is within the limit. We need to ensure that if a target point would require
         # interpolation between two original data points where one or both are NaN (bad data),
         # the result remains NaN.
-        # 
+        #
         # The limit parameter in interpolate() handles distance, but we still need to check
         # if the bounding original data points are NaN (bad data flags).
-        
+
         # Create a mask for valid interpolated values (vectorized via searchsorted).
         # For each target time we need to know if both bounding original data
         # points are non-NaN.  The previous per-target-time loop was O(N*M*K);
@@ -277,6 +294,12 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
         # Set invalid interpolated values to NaN
         df_new = df_new.where(valid_mask)
 
+    # Reindex to the full master timeline. Regions outside the clipped
+    # window are filled with NaN, which is correct — no data existed there.
+    full_dts = pd.date_range(full_start, full_end, freq=str(step_S) + 's', tz=tzf)
+    if not df_new.index.equals(full_dts):
+        df_new = df_new.reindex(full_dts)
+
     # Plot the Original Data & the Re- Mapped stuff so you can see if its good:
     if quiet is False:
         one = df.columns[0]
@@ -308,10 +331,13 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
     print('All Column Names:', df.columns) if quiet is False else None
 
     # Identify all the names of time related columns in the dataframe.
+    # Use word-boundary matching: require tm_name patterns to appear as
+    # complete tokens (bounded by '_' or string start/end). This prevents
+    # false positives like "altitude" matching "lt" or "static" matching "est".
     times = list()  # Empty list to contain columns with time-like names.
     for col in df.columns:
-        if any(nm in col.lower() for nm in tm_names):
-            col_lower = col.lower()
+        col_lower = col.lower()
+        if any(re.search(r'(^|_)' + re.escape(nm) + r'(_|$)', col_lower) for nm in tm_names):
             times.append(col_lower)  # fill the list with those names.
             # Rename all time cols in lowercase to make string matches easier
             if col != col_lower:  # Only rename if different
@@ -880,19 +906,35 @@ def _main_loop_parse_flights(DATA: dict):
         df_all = pd.concat(df_list, ignore_index=True)
     else:  # Merge_Beside mode
         # Handle duplicate column names - can occur even with prefix_instr_name=True
-        # when multiple files come from the same instrument
-        df_all = df_list[0]
+        # when multiple files come from the same instrument (e.g. multi-leg flights
+        # that share column names). Accumulate non-overlapping frames for a single
+        # fast concat at the end; only use combine_first for true overlaps.
+        non_overlapping_list = [df_list[0]]
+        all_cols_so_far = set(df_list[0].columns)
+
         for df_data in df_list[1:]:
-            overlapping_cols = set(df_all.columns) & set(df_data.columns)
-            non_overlapping_cols = set(df_data.columns) - overlapping_cols
+            new_cols = set(df_data.columns)
+            overlapping_cols = all_cols_so_far & new_cols
+            non_overlapping_cols = new_cols - overlapping_cols
 
             if overlapping_cols:
+                # Merge overlapping columns into the first frame using combine_first
+                if non_overlapping_list:
+                    # Materialize accumulated frames so we can update in place
+                    df_all = pd.concat(non_overlapping_list, axis=1)
+                    non_overlapping_list = [df_all]
+
                 for col in overlapping_cols:
-                    df_all[col] = df_all[col].combine_first(df_data[col])
+                    non_overlapping_list[0][col] = non_overlapping_list[0][col].combine_first(df_data[col])
                 if non_overlapping_cols:
-                    df_all = pd.concat([df_all, df_data[list(non_overlapping_cols)]], axis=1)
+                    non_overlapping_list.append(df_data[list(non_overlapping_cols)])
             else:
-                df_all = pd.concat([df_all, df_data], axis=1)
+                non_overlapping_list.append(df_data)
+
+            all_cols_so_far |= new_cols
+
+        # Single concat at the end
+        df_all = pd.concat(non_overlapping_list, axis=1)
 
     # Check if the User wants us to align the Stacked data to a master timeline
     # Aligns AFTER all icartts have been loaded in.
