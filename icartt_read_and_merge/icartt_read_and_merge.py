@@ -189,7 +189,8 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
 
     # Get the average native sampling frequency in total seconds:
     tseries = df.index.to_series()
-    min_sep = int(np.round(tseries.diff().mean().total_seconds()))
+    mean_sep_s = tseries.diff().mean().total_seconds()
+    min_sep = int(np.round(mean_sep_s))
 
     if quiet is False:
         print('Native Mean Time Sep. (s): ', str(min_sep) + 's')
@@ -202,7 +203,7 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
     # to the unclipped case.
     data_min = df.index.min()
     data_max = df.index.max()
-    lim_seconds = lim * min_sep if lim else 4350
+    lim_seconds = lim * mean_sep_s if lim else 4350
     buffer = pd.Timedelta(seconds=max(lim_seconds, 300))  # at least 5 min
     full_start = pd.Timestamp(startdt, tz=tzf)
     full_end = pd.Timestamp(enddt, tz=tzf)
@@ -215,11 +216,18 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
     # reindex it to our full date range, as close to native  freq as you can,
     # then take a roliing avg to get the X second avg on the time base we want
     if min_sep < step_S:
-        dts = pd.date_range(clip_start, clip_end, freq=str(min_sep) + 's',
-                            tz=tzf)
+        if min_sep >= 1:
+            native_freq = str(min_sep) + 's'
+        else:
+            # Sub-second native data (e.g. 20-25 Hz cloud probes): build the
+            # near-native grid in milliseconds; rounding to whole seconds
+            # would give an invalid '0s' frequency.
+            native_freq = str(max(1, int(np.round(mean_sep_s * 1000)))) + 'ms'
+        dts = pd.date_range(clip_start, clip_end, freq=native_freq, tz=tzf)
 
         if not lim:
-            lim = np.round(4350 / min_sep)  # don't fill if collect>than 1H out
+            # don't fill if collect > than 1H out
+            lim = np.round(4350 / max(mean_sep_s, 1e-3))
 
         dfn = df.reindex(dts, method='nearest', fill_value=np.nan,
                          limit=int(lim))
