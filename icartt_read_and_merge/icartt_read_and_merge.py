@@ -161,11 +161,28 @@ def _organize_standard_and_multileg_flights(DATA: dict):
     return flights  # Return the organized flights as a dictionary.
 
 
+# Wind direction is a compass bearing in degrees (0-360). Matches 'WDIR',
+# 'Wind_Direction', 'WindDir', 'wind_dir', with or without an instrument-name
+# prefix. Deliberately does NOT match Latitude/Longitude/Pitch/Roll/Heading.
+_WIND_DIR_RE = re.compile(r'(?:^|_)(?:WDIR|wind[ _]?dir(?:ection)?)', re.IGNORECASE)
+
+
+def _wind_direction_cols(columns):
+    """Columns holding a wind-direction bearing (must be vector-averaged)."""
+    return [c for c in columns if _WIND_DIR_RE.search(str(c))]
+
+
 def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
                           step_S: int, quiet: bool = True,
                           lim: int = None, datetime_index: bool = False,
                           tzf: str = 'UTC'):
-    """Resample dataframes to appropriate timelines."""
+    """Resample dataframes to appropriate timelines.
+
+    Wind-direction columns are resampled as unit vectors (cos/sin components
+    averaged or interpolated, then recombined with atan2) so the 0/360 wrap
+    never corrupts the result — i.e. wind direction is vector-averaged, not
+    scalar-averaged. All other columns keep the original scalar behaviour.
+    """
     # Function to take a dataframe and appropriately remap it to a new time
     # index, considering the native sampling frequency as it is relative
     # to the desired new time. Writte 2/6/21, jessica d. haskins
@@ -186,6 +203,21 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
         df = df[df['datetime'].notna()]  # if datetime is nan drop whole row.
         df = df.set_index('datetime')  # Make the datetime an index.
     df = df[~df.index.duplicated()]  # remove any duplicates rows
+
+    # Wind direction is a compass bearing: averaging or interpolating it as a
+    # scalar corrupts values across the 0/360 discontinuity (e.g. mean of 350
+    # and 10 deg is 0, not 180). Convert each such column to cos/sin components
+    # so the generic resampling below acts on continuous quantities; they are
+    # recombined with atan2 afterward, which is exactly a unit-vector (circular)
+    # average of the direction.
+    wind_dir_cols = _wind_direction_cols(df.columns)
+    orig_col_order = list(df.columns)
+    for c in wind_dir_cols:
+        rad = np.deg2rad(pd.to_numeric(df[c], errors='coerce'))
+        df = df.assign(**{f'{c}__windcos': np.cos(rad),
+                          f'{c}__windsin': np.sin(rad)})
+    if wind_dir_cols:
+        df = df.drop(columns=wind_dir_cols)
 
     # Get the average native sampling frequency in total seconds:
     tseries = df.index.to_series()
@@ -307,6 +339,18 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
     full_dts = pd.date_range(full_start, full_end, freq=str(step_S) + 's', tz=tzf)
     if not df_new.index.equals(full_dts):
         df_new = df_new.reindex(full_dts)
+
+    # Recombine wind-direction unit vectors back into a bearing in [0, 360).
+    # atan2 of the resampled (cos, sin) is the circular mean in the averaging
+    # branch and a wrap-safe interpolation in the interpolation branch.
+    for c in wind_dir_cols:
+        cc, ss = f'{c}__windcos', f'{c}__windsin'
+        if cc in df_new.columns and ss in df_new.columns:
+            df_new[c] = np.degrees(np.arctan2(df_new[ss], df_new[cc])) % 360.0
+            df_new = df_new.drop(columns=[cc, ss])
+    if wind_dir_cols:
+        df_new = df_new.reindex(
+            columns=[col for col in orig_col_order if col in df_new.columns])
 
     # Plot the Original Data & the Re- Mapped stuff so you can see if its good:
     if quiet is False:
