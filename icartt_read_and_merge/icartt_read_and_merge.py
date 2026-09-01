@@ -222,6 +222,10 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
     # Get the average native sampling frequency in total seconds:
     tseries = df.index.to_series()
     mean_sep_s = tseries.diff().mean().total_seconds()
+    if not np.isfinite(mean_sep_s) or mean_sep_s <= 0:
+        # degenerate file (0-1 usable rows, or duplicated timestamps): any
+        # grid spacing works for the few values present
+        mean_sep_s = 1.0
     min_sep = int(np.round(mean_sep_s))
 
     if quiet is False:
