@@ -219,6 +219,13 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
     if wind_dir_cols:
         df = df.drop(columns=wind_dir_cols)
 
+    # Some archived files carry out-of-order or duplicated timestamps
+    # (seen in SEAC4RS); reindex/fill below require a monotonic unique index
+    if not df.index.is_monotonic_increasing:
+        df = df.sort_index()
+    if df.index.has_duplicates:
+        df = df[~df.index.duplicated(keep='first')]
+
     # Get the average native sampling frequency in total seconds:
     tseries = df.index.to_series()
     mean_sep_s = tseries.diff().mean().total_seconds()
