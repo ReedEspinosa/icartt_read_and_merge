@@ -379,6 +379,39 @@ def align2master_timeline(df: pd.DataFrame, startdt: str, enddt: str,
     return df_new
 
 
+def _units_are_timelike(units: str):
+    """True when an ICARTT units string plausibly describes a time of day."""
+    return bool(re.search(r'sec|sfm|utc|hh|hour|minute|time|day',
+                          str(units), re.IGNORECASE))
+
+
+def _header_units(icartt_file: str):
+    """{column_name_lower: units} parsed from an ICARTT (FFI 1001) header.
+
+    Best-effort: covers the independent-variable line and the dependent-
+    variable definition lines ('name, units[, description]'). Any parse
+    trouble returns what was gathered so far (possibly empty) — callers
+    treat a missing entry as "units unknown".
+    """
+    out = {}
+    try:
+        with open(icartt_file, 'r', errors='replace') as f:
+            first = f.readline()
+            n_header = int(first.split(',')[0])
+            # lines 2 .. n_header-1: the last header line is the row of
+            # column names, which must not be parsed as a definition line
+            lines = [f.readline() for _ in range(n_header - 2)]
+        for line in lines:
+            parts = [p.strip() for p in line.split(',')]
+            # variable-definition lines: a plausible name token then units
+            if len(parts) >= 2 and re.fullmatch(r'[A-Za-z][\w .\-/#%()]*',
+                                                parts[0] or ''):
+                out.setdefault(parts[0].lower(), parts[1])
+    except Exception:
+        pass
+    return out
+
+
 def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
                         quiet: bool = True):
     """Identify the date like columns in a dataframe from an icartt file."""
@@ -397,18 +430,49 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
     # Use word-boundary matching: require tm_name patterns to appear as
     # complete tokens (bounded by '_' or string start/end). This prevents
     # false positives like "altitude" matching "lt" or "static" matching "est".
+    # Header units, used to veto name-only false positives (see below).
+    units_map = _header_units(icartt_file)
+
     times = list()  # Empty list to contain columns with time-like names.
     for col in df.columns:
         col_lower = col.lower()
         if any(re.search(r'(^|_)' + re.escape(nm) + r'(_|$)', col_lower) for nm in tm_names):
+            # Name alone is not proof: 'lt' is also the token for "less
+            # than" (e.g. AMS 'OA_lt_1um_AMS_60s'), which word-boundary
+            # matching cannot distinguish from Local Time. When the ICARTT
+            # header archives units for this column and they are clearly
+            # not time units, veto the match instead of silently dropping
+            # a data column later in the time pipeline.
+            units = units_map.get(col.strip().lower())
+            if units is not None and not _units_are_timelike(units):
+                _warn(f"Column '{col}' has a time-like name but non-time "
+                      f"units '{units}' in the ICARTT header; keeping it "
+                      "as a data column.") if quiet is False else None
+                continue
             times.append(col_lower)  # fill the list with those names.
             # Rename all time cols in lowercase to make string matches easier
             if col != col_lower:  # Only rename if different
                 df.rename(columns={col: col_lower}, inplace=True)
 
+    # Units-driven rescue for time columns the name tokens miss entirely
+    # (e.g. AMS 'AMS_Starttime'/'AMS_Stoptime': no utc/time token, but the
+    # header units say 'seconds_past_midnight'). Require BOTH time-like
+    # header units and a start/stop/end/mid name so ordinary data columns
+    # can never be pulled in.
+    for col in list(df.columns):
+        col_lower = col.lower()
+        if col_lower in times:
+            continue
+        units = units_map.get(col.strip().lower())
+        if units is not None and _units_are_timelike(units) and \
+                re.search(r'start|stop|end|mid', col_lower):
+            times.append(col_lower)
+            if col != col_lower:
+                df.rename(columns={col: col_lower}, inplace=True)
+
     # Make sure you haven't grabbed a day column for time by accident. Drop it.
     times = [t for t in times if 'day' not in t]
-    
+
     # Ensure all times in the list actually exist in the dataframe
     times = [t for t in times if t in df.columns]
 
