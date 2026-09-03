@@ -433,6 +433,24 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
     # Header units, used to veto name-only false positives (see below).
     units_map = _header_units(icartt_file)
 
+    def _units_of(colname):
+        """Header units for a column, tolerant of instrument-title prefixes.
+
+        The multi-instrument merge prefixes column names with the ICARTT
+        title BEFORE time parsing, so an exact lookup misses (which silently
+        disabled the veto/rescue below and let 'lt'-named species be eaten
+        as Local Time again). Fall back to the LONGEST header key that the
+        column name ends with at a '_' boundary.
+        """
+        c = colname.strip().lower()
+        if c in units_map:
+            return units_map[c]
+        best = None
+        for k, v in units_map.items():
+            if c.endswith('_' + k) and (best is None or len(k) > len(best[0])):
+                best = (k, v)
+        return best[1] if best else None
+
     times = list()  # Empty list to contain columns with time-like names.
     for col in df.columns:
         col_lower = col.lower()
@@ -443,7 +461,7 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
             # header archives units for this column and they are clearly
             # not time units, veto the match instead of silently dropping
             # a data column later in the time pipeline.
-            units = units_map.get(col.strip().lower())
+            units = _units_of(col)
             if units is not None and not _units_are_timelike(units):
                 _warn(f"Column '{col}' has a time-like name but non-time "
                       f"units '{units}' in the ICARTT header; keeping it "
@@ -463,7 +481,7 @@ def _find_datelike_cols(df: pd.DataFrame, icartt_file: str,
         col_lower = col.lower()
         if col_lower in times:
             continue
-        units = units_map.get(col.strip().lower())
+        units = _units_of(col)
         if units is not None and _units_are_timelike(units) and \
                 re.search(r'start|stop|end|mid', col_lower):
             times.append(col_lower)
