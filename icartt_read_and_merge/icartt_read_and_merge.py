@@ -145,18 +145,31 @@ def _organize_standard_and_multileg_flights(DATA: dict):
     for ict in DATA['ICARTT_FILES']:  # Loop over all files in the directory.
         # If regular expression is not matched anywhere in string,
         if re.search(multileg_regex, ict) is None:
-            # Add to list of "standard" flights (e.g. not a leg)
+            # Add to list of "standard" flights (e.g. not a leg). Some
+            # archives carry BOTH a combined file and per-leg files for the
+            # same flight (e.g. ACTIVATE-LARGE-CCN 2022-06-08); prefer the
+            # combined file over any legs collected so far.
+            if isinstance(flights.get(ict), list):
+                _warn(f"Both combined and leg files exist for "
+                      f"{os.path.basename(ict)}; using the combined file")
             flights[ict] = ict
 
         else:  # Else if regular expression is matched in string.
             # The output file won't have the suffix.
             output_filename = ict[:-7] + ".ict"
 
+            existing = flights.get(output_filename)
+            if isinstance(existing, str):
+                # A combined (leg-less) file already covers this flight;
+                # skip the individual legs to avoid duplicating rows.
+                _warn(f"Skipping leg file {os.path.basename(ict)}: combined "
+                      f"file {os.path.basename(output_filename)} is present")
+                continue
             # Add this file to the dict of multi-leg flights.
-            if output_filename not in flights:
+            if existing is None:
                 flights[output_filename] = [ict]
             else:
-                flights[output_filename].append(ict)
+                existing.append(ict)
 
     return flights  # Return the organized flights as a dictionary.
 
