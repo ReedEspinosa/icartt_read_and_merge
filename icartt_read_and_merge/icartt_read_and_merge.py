@@ -845,10 +845,10 @@ def _build_meta_dict(icartt_file: str, meta: dict = {}, flt_num: int = None):
                 'PI_Info': {}, 'Uncertainty': {}, 'Revision': {},
                 'Stipulations': {}, 'Institution_Info': {}}
     # Open the file.
-    with open(icartt_file, "r") as f:  # Get number of header rows
+    with open(icartt_file, "r", errors="replace") as f:  # Get number of header rows
         header_row = int(f.readlines()[0].split(",")[0]) - 1
 
-    with open(icartt_file, "r") as f:
+    with open(icartt_file, "r", errors="replace") as f:
         reader = csv.reader(f)
         ln_num = 0  # intitalize line counting var.
         for row in reader:
@@ -904,12 +904,12 @@ def read_icartt(icartt_file: str, flt_num: int = None, meta: dict = {},
                 instr_name_prefix: bool = False, add_file_no: bool = False):
     """Parse a single ICARTT file to a pandas dataframe."""
     # Get the header row number from the ICARTT.
-    with open(icartt_file, "r") as f:
+    with open(icartt_file, "r", errors="replace") as f:
         first_line = f.readlines()[0]
         header_row_num = int(first_line.split(",")[0]) - 1
     
     # Check if the header row is a separator row (all asterisks), if so use next row
-    with open(icartt_file, "r") as f:
+    with open(icartt_file, "r", errors="replace") as f:
         lines = f.readlines()
         if header_row_num < len(lines):
             header_line = lines[header_row_num].strip()
@@ -925,10 +925,10 @@ def read_icartt(icartt_file: str, flt_num: int = None, meta: dict = {},
 
     # Parse the table starting where data begins (e.g. after the header).
     # Use skiprows to skip up to the header, then use header=0 to read column names from first row
-    df = pd.read_csv(icartt_file, skiprows=header_row_num, nrows=0, delimiter=",", skipinitialspace=True)
+    df = pd.read_csv(icartt_file, skiprows=header_row_num, nrows=0, delimiter=",", skipinitialspace=True, encoding_errors="replace")
     column_names = list(df.columns)
     # Now read the actual data starting from the row after the header
-    df = pd.read_csv(icartt_file, skiprows=header_row_num + 1, names=column_names, delimiter=",", skipinitialspace=True)
+    df = pd.read_csv(icartt_file, skiprows=header_row_num + 1, names=column_names, delimiter=",", skipinitialspace=True, encoding_errors="replace")
 
     # Set possible error values to NaNs - single vectorized operation instead of 5 scans
     df.mask(df.isin([-9, -99, -999, -9999, -99999]), np.nan, inplace=True)
